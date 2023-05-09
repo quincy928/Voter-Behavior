@@ -1,0 +1,705 @@
+---
+title: "Predicting Voter Behavior"
+author: "Carter Taffe, Parsa Zadeh"
+date: "11/29/2022"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(maps)
+library(tidyverse)
+library(ISLR)
+library(glmnet)
+library(tree)
+library(maptree)
+library(randomForest)
+library(gbm)
+library(ROCR)
+library(caret)
+```
+## Data Processing
+```{r, echo=FALSE}
+## read data and convert candidate names and party names from string to factor
+## we manually remove the variable "won", the indicator of county level winner
+## In Problem 5 we will reproduce this variable!
+election.raw <- read_csv("candidates_county.csv", col_names = TRUE) %>% 
+  mutate(candidate = as.factor(candidate), party = as.factor(party), won = NULL)
+
+## remove the word "County" from the county names
+words.to.remove = c("County")
+remove.words <- function(str, words.to.remove){
+  sapply(str, function(str){
+    x <- unlist(strsplit(str, " "))
+    x <- x[!x %in% words.to.remove]
+    return(paste(x, collapse = " "))
+  }, simplify = "array", USE.NAMES = FALSE)
+}
+election.raw$county <- remove.words(election.raw$county, words.to.remove)
+
+## read census data
+census <- read_csv("census_county.csv") 
+```
+
+## Election Data Properties
+```{r,echo=FALSE}
+print("Dimenstions of election data")
+dim(election.raw)
+
+print("Number of Missing Values")
+sum(is.na(election.raw))
+
+print("Number of distinct values in the state column")
+n_distinct(election.raw$state)
+
+```
+
+## Census Data Properties
+```{r,echo=FALSE}
+print("Dimenstions of census data")
+dim(census)
+
+print("Number of Missing Values")
+sum(is.na(census))
+
+print("Number of distinct values in the county column")
+n_distinct(census$County)
+
+print("How many more counties are there in election data?")
+n_distinct(election.raw$county) - n_distinct(census$County)
+
+```
+
+## Aggregate Datasets
+```{r,echo=FALSE}
+election.state <- election.raw %>%
+  group_by(state,candidate,party) %>%
+  summarise(total = sum(total_votes))
+print("Aggreggated State Dataset")
+election.state
+
+print("Aggregated Federal Data Set")
+election.total <- election.raw %>%
+  group_by(candidate,party) %>%
+  summarise(total = sum(total_votes))
+election.total
+```
+
+## First Glance at Votes
+```{r,echo=FALSE}
+print("How many unique candidates")
+elect <- aggregate(election.total$total, by=list(candidate=election.total$candidate), FUN=sum)
+dim(election.total)[1]
+
+#Plot Data
+ggplot(data = elect, mapping = aes(x = candidate,y = log(x))) +
+ geom_bar(stat="identity") +
+ scale_y_continuous() +
+ ylab("votes (log scale)") +
+ coord_flip()
+```
+
+## Winner by County
+```{r,echo=FALSE}
+
+county.winner <- election.raw %>%
+  group_by(state,county) %>%
+  summarise(total=sum(total_votes))
+
+
+county.winner <- left_join(election.raw,county.winner)
+county.winner <- county.winner %>% mutate(pct = round(100*(total_votes/total),2))
+
+county.winner <- top_n(county.winner%>%group_by(county),1)
+
+county.winner <- county.winner %>% mutate(state=tolower(state))
+county.winner <- county.winner %>%
+  rename('region' = 'state')
+
+print("County Winner Dataset")
+county.winner
+
+
+```
+
+## Winner by State
+```{r,echo=FALSE}
+state.candidate.votes <- election.raw %>%
+  group_by(state,candidate) %>%
+  summarise(state.candidate.votes=sum(total_votes))
+
+state.total.votes <- election.raw %>%
+  group_by(state) %>%
+  summarise(state.total.votes=sum(total_votes))
+
+state.winner <- left_join(state.candidate.votes,state.total.votes)
+
+state.winner <- state.winner %>% mutate(pct = round(100*(state.candidate.votes/state.total.votes),2))
+
+state.winner <- top_n(state.winner,1)
+
+state.winner <- state.winner %>% mutate(state=tolower(state))
+state.winner <- state.winner %>%
+  rename('region' = 'state')
+print("State Winner Dataset")
+state.winner
+```
+
+
+## US Map colored by State
+```{r,echo=FALSE,fig.height=6}
+states <- map_data("state")
+
+ggplot(data = states) + 
+  geom_polygon(aes(x = long, y = lat, fill = region, group = group),
+               color = "white") + 
+  coord_fixed(1.3) +
+  guides(fill=FALSE) 
+
+```
+
+## US Map colored by County
+```{r,echo=FALSE,fig.height=6,fig.align='center'}
+counties <- map_data("county")
+
+
+ggplot(data = counties) + 
+  geom_polygon(aes(x = long, y = lat, fill = subregion, group = group),
+               color = "white") + 
+  coord_fixed(1.3) +
+  guides(fill=FALSE) 
+
+
+```
+## Winner in each State
+```{r,echo=FALSE,fig.height=6,fig.align='center'}
+combined.states <- left_join(states,state.winner)
+
+winners2020 <- ggplot(data = combined.states) + 
+  geom_polygon(aes(x = long, y = lat, fill = as.character(candidate), group = group),
+               color = "white") + 
+  coord_fixed(1.3) +
+  guides(fill=FALSE) 
+
+winners2020
+```
+## Winner in each California County
+```{r,echo=FALSE,fig.height=6,fig.align='center'}
+cali.map <- counties %>% filter(region=="california")
+cali.winners <- county.winner %>% filter(region=='california')
+cali.winners <- cali.winners %>% mutate(county = tolower(county))
+cali.winners <- cali.winners %>% rename("subregion" = "county")
+
+combined.cali <- left_join(cali.map,cali.winners,by="subregion")
+
+ggplot(data = combined.cali) + 
+  geom_polygon(aes(x = long, y = lat, fill = as.character(candidate), group = group),
+               color = "white") + 
+  coord_fixed(1.3) +
+  guides(fill=FALSE) 
+```
+
+
+## Cleaning up the Census Data
+```{r,echo=FALSE}
+census.clean <- na.omit(census)
+#Change to percentages
+census.clean <- census.clean %>% mutate(Men = 100*(Men/TotalPop))
+census.clean <- census.clean %>% mutate(Employed = 100*(Employed/TotalPop))
+census.clean <- census.clean %>% mutate(VotingAgeCitizen = 100*(VotingAgeCitizen/TotalPop))
+#Combine into one minority column
+census.clean <- census.clean %>% mutate(Minority = Hispanic + Black + Native + Asian + Pacific)
+#Remove columns we dont want
+census.clean <- subset(census.clean,select=-c(Hispanic,Black,Native,Asian,Pacific,IncomeErr,IncomePerCap,IncomePerCapErr,Walk,PublicWork,Construction,Women))
+
+head(census.clean,5)
+
+```
+
+## Racial Minority voter Behavior
+```{r,echo=FALSE,fig.height=6,fig.align='center'}
+high.pct.minority <- census.clean %>%
+   mutate(HighMinority = as.factor(ifelse(Minority >=40,"Yes","No")))
+
+high.pct.minority <- high.pct.minority %>% mutate(State=tolower(State))
+high.pct.minority <- high.pct.minority %>%
+  rename('region' = 'State')
+
+
+combined.census <- left_join(states,high.pct.minority)
+
+high.minority.graph <- ggplot(data = combined.census) + 
+  geom_polygon(aes(x = long, y = lat, fill = as.character(HighMinority), group = group),
+               color = "white") + 
+  coord_fixed(1.3) +
+  guides(fill=FALSE) +
+  labs(main="States with 40% minority population or more(blue)")
+print("States with more than 40% minority population")
+high.minority.graph
+print("2020 Election winners")
+winners2020
+```
+Interestingly, in many states with a high minority population (>40%), Joe biden was the winning candidate
+
+## PCA for Census.clean
+```{r,echo=FALSE}
+census.clean.PCA <- subset(census.clean,select=-c(State,County))
+
+pc.census = prcomp(census.clean.PCA, scale=TRUE, center=TRUE)
+pc.county = pc.census$x[,1:2]
+print("First two Principal Components")
+head(pc.county)
+
+pc12 <- subset(as.data.frame(pc.census$rotation[,1:2]), select = PC1)
+pcabsolute <- abs(pc12)
+print("Features with largest loadings")
+sapply(pcabsolute, function(x) head(row.names(pcabsolute)[order(x, decreasing=TRUE)],3))
+
+```
+Centering must be performed for PCA to work. I scaled my data because some columns were reported as percentage values and others just as raw data. Features with opposite signs are not correlated, meaning they do not interact with one another.
+
+
+## Plots for PCA 12
+```{r,echo=FALSE,fig.height=6}
+pr_var=pc.census$sdev^2
+pve=pr_var/sum(pr_var)
+cumulativepve <- cumsum(pve)
+plot(pve, xlab="Principal Component", 
+     ylab="Proportion of Variance Explained ", ylim=c(0,0.4),type='b')
+
+plot(cumulativepve, xlab="Principal Component ", 
+     ylab=" Cumulative Proportion of Variance Explained ", ylim=c(0,1), type='b')
+
+print("How many Principal Components to explain 90% of the data?")
+cumulativepve[13]
+
+
+```
+We need 13 principal components to explain 90% of the variance.
+
+## Clustering
+```{r,fig.height=6,echo=FALSE}
+#Remove state and county
+census.clean.CLST <- subset(census.clean,select=-c(State,County))
+#Scale our data
+scaled.census = scale(census.clean.CLST, center=TRUE, scale=TRUE)
+#Euclidian Distance
+census.dist <- dist(scaled.census)
+#Create Clusters
+census.hclust = hclust(census.dist)
+#Cut down to ten trees
+hclust.ct = cutree(census.hclust, k=10)
+#Display
+print("Clustering")
+table(hclust.ct)
+
+
+
+
+#Include first 2 principal components
+
+hclust.pc <- cutree(hclust(dist(scale(data.frame(pc.county)))),k=10)
+print("Clustering with first two principal components")
+table(hclust.pc)
+```
+When we include the first two principal components in our hirearchical clustering, our data appear to be more evenly spread out among the clusters. Probably a better model given what we know about the variables in census.
+## Check Santa Barbara Cluster
+```{r,echo=FALSE}
+print("Index of SB")
+census.clean[228,]
+
+print("What cluster is SB in")
+hclust.ct[228]
+
+#Add cluster level to our census data
+hclust.ct.df <- as.data.frame(hclust.ct)
+check.clusts <- data.frame(hclust.ct.df,census.clean)
+
+
+check.sb <- check.clusts %>% filter(hclust.ct.df == 1)
+head(check.sb)
+print("Variance of the following variables: Minority, Employed, Poverty, VotingAge")
+var(check.sb$Minority)
+var(check.sb$Employed)
+var(check.sb$Poverty)
+var(check.sb$VotingAgeCitizen)
+
+```
+To determine whether clustering was performed well we want to examine if clusters represent true subgroups. Meaning observations within each cluster truly share similar attributes. By looking at the overall variance of a few variables within cluster 1, we can get an idea of how well the clustering worked. Furthermore, we can easily compare the calculated variances from the two clustering approaches and draw conclusions. 
+
+
+## Repeat above but with Principal Components
+```{r,echo=FALSE}
+#What cluster is SB in
+hclust.pc[228]
+
+#Add cluster level to our census data
+hclust.pc.df <- as.data.frame(hclust.pc)
+check.clusts.pc <- data.frame(hclust.pc.df,census.clean)
+
+#Look at a df where clusters=1 (cluster sb is part of)
+check.sb.pc <- check.clusts.pc %>% filter(hclust.pc.df == 5)
+head(check.sb.pc)
+print("Variance of the following variables: Minority, Employed, Poverty, VotingAge")
+var(check.sb.pc$Minority)
+var(check.sb.pc$Employed)
+var(check.sb.pc$Poverty)
+var(check.sb.pc$VotingAgeCitizen)
+```
+Overall, we have smaller variances for the variables I selected to investigate. This leads me to be that the cluster Santa Barbara belongs to in the approach that included the first two principal components represents a more accurate subgroup of the data. This approach put Santa Barbara in a more accurate cluster.
+
+## Prepping data for Classification
+```{r,echo=FALSE}
+county.winner <- county.winner %>% rename("state" = "region")
+
+# we move all state and county names into lower-case
+tmpwinner <- county.winner %>% ungroup %>%
+  mutate_at(vars(state, county), tolower)
+
+# we move all state and county names into lower-case
+# we further remove suffixes of "county" and "parish"
+tmpcensus <- census.clean %>% mutate_at(vars(State, County), tolower) %>%
+  mutate(County = gsub(" county|  parish", "", County)) 
+
+# we join the two datasets
+election.cl <- tmpwinner %>%
+  left_join(tmpcensus, by = c("state"="State", "county"="County")) %>% 
+  na.omit
+
+# drop levels of county winners if you haven't done so in previous parts
+election.cl$candidate <- droplevels(election.cl$candidate)
+
+## save meta information
+election.meta <- election.cl %>% select(c(county, party, CountyId, state, total_votes, pct, total))
+
+## save predictors and class labels
+election.cl2 = election.cl %>% select(-c(party, CountyId, state, pct, total))
+election.cl = election.cl %>% select(-c(county, party, CountyId, state, total_votes, pct, total))
+
+
+
+```
+We need to exclude party because it will have the strongest influence on our response, given that the winning candidate will have the same party preference in every county. Obviously if party=Democrat, candidate=Joe Biden as only one Democrat was running in the primary election. 
+
+## Split data into training and test data
+```{r,echo=FALSE}
+set.seed(10) 
+n <- nrow(election.cl)
+idx.tr <- sample.int(n, 0.8*n) 
+election.tr <- election.cl[idx.tr, ]
+election.te <- election.cl[-idx.tr, ]
+
+election.tr2 <- election.cl2[idx.tr, ]
+election.te2 <- election.cl2[-idx.tr, ]
+
+```
+
+## Define the folds
+```{r,echo=FALSE}
+set.seed(20) 
+nfold <- 10
+folds <- sample(cut(1:nrow(election.tr), breaks=nfold, labels=FALSE))
+
+```
+
+## Error Rate Function
+```{r,echo=FALSE}
+calc_error_rate = function(predicted.value, true.value){
+  return(mean(true.value!=predicted.value))
+}
+records = matrix(NA, nrow=3, ncol=2)
+colnames(records) = c("train.error","test.error")
+rownames(records) = c("tree","logistic","lasso")
+```
+
+
+## Fit a tree
+```{r,echo=FALSE}
+census.tree <- tree(candidate~.,data=election.tr)
+
+census.cv = cv.tree(census.tree, FUN=prune.misclass, K=folds)
+
+census.cv$size
+census.cv$dev
+
+print("Tree Size")
+best_size = min(census.cv$size[census.cv$dev == min(census.cv$dev)])
+best_size
+
+
+census.tree.pruned = prune.misclass(census.tree, best=best_size)
+
+# Draw non pruned tree
+draw.tree(census.tree, nodeinfo=TRUE, cex = 0.4)
+title("Full Tree")
+#Draw pruned tree
+draw.tree(census.tree.pruned, nodeinfo=TRUE, cex= 0.4)
+title("Pruned Tree")
+
+```
+Looking at our pruned tree it would seem as though transit is the biggest predictor of voter behavior. The only conclusion I can draw from this is that larger cities with better public transportation tended to vote for Trump. The cutoff for "High transportation" is only 1% however so this is kind of hard to interpret. Secondly we have TotalPop, and White. Higher white population correlated to higher votes for Trump, this one makes sense. Counties with greater total population tended to vote for Biden, which aligns more with my prior knowledge of voter behavior, though seems a bit contradictory to the public transportation.
+
+Story time:
+In the county I live in where more than one of my 100 friends and family use public transportation, I, an employed black citizen under the age of 76 decided to vote for Joe Biden.
+
+## Training and test errors Tree
+```{r,echo=FALSE}
+census.tree.pred.te = predict(census.tree.pruned, election.te)
+census.tree.pred.tr = predict(census.tree.pruned, election.tr)
+
+
+election.tr.mutated = election.tr %>%
+  mutate(predict.candidate=as.factor(ifelse(census.tree.pred.tr[,1]>=0.5 , "Donald Trump", "Joe Biden")))
+
+election.te.mutated = election.te %>%
+  mutate(predict.candidate=as.factor(ifelse(census.tree.pred.te[,1]>=0.5 , "Donald Trump", "Joe Biden")))
+
+
+records[1,2]=calc_error_rate(election.te.mutated$predict.candidate,election.te$candidate)
+records[1,1]=calc_error_rate(election.tr.mutated$predict.candidate,election.tr$candidate)
+
+records
+```
+
+## Logistic Regression
+```{r,echo=FALSE}
+log.census <- glm(candidate~.,family="binomial",data=election.tr)
+summary(log.census)
+
+importance.log <- varImp(log.census,scale=FALSE)
+print("Variable Importance")
+sapply(importance.log, function(x) head(row.names(importance.log)[order(x, decreasing=TRUE)],5))
+
+#Predicted classes
+log.train.pred <- predict(log.census, election.tr, type="response")
+
+log.test.pred <- predict(log.census, election.te, type="response")
+
+#Add column for our predictions
+election.tr.mutated = election.tr %>%
+  mutate(predict.candidate=as.factor(ifelse(log.train.pred<=0.5 , "Donald Trump", "Joe Biden")))
+
+election.te.mutated = election.te %>%
+  mutate(predict.candidate=as.factor(ifelse(log.test.pred<=0.5 , "Donald Trump", "Joe Biden")))
+
+#Update our records file
+records[2,1]=calc_error_rate(election.tr.mutated$predict.candidate,election.tr$candidate)
+
+records[2,2]=calc_error_rate(election.te.mutated$predict.candidate,election.te$candidate)
+records
+
+
+
+```
+Our logistic model is not at all consistent with what we saw in our tree model.
+VotingAgeCitizen,Professional,Service,Office,Production,Drive,Carpool,Transit,Employed,PrivateWork,and Unemployment were significant at an alpha of 0.05. A one unit change in Professional would result in a 3.330e-01 unit change in the log odds of our response. A one unit change in Employed would result in a 2.669e-01 change in the log odds of our response. 
+
+
+
+## Problem 17 Lasso
+```{r,Warning=FALSE,echo=FALSE}
+set.seed(123)
+
+
+lambda = seq(1, 50) * 1e-4
+dat <- model.matrix(candidate~., election.cl)[,-1]
+
+n <- nrow(election.cl)
+index.tr <- sample.int(n, 0.8*n) 
+
+x.train = dat[index.tr, ]
+y.train = election.cl[index.tr, ]$candidate
+
+
+
+# The rest as test data
+x.test = dat[-index.tr, ]
+y.test = election.cl[-index.tr, ]$candidate
+
+lasso.cv <- cv.glmnet(x.train, y.train, lambda=lambda,alpha=1, folds=10,family="binomial")
+
+print("Optimal lambda parameter")
+lasso.cv$lambda.min
+
+
+
+
+
+#Non-Zero Coefficients when using optimal lambda
+(coef(lasso.cv, s = lasso.cv$lambda.min))[coef(lasso.cv, s = lasso.cv$lambda.min)[,1]!= 0]
+
+#Lasso Coeffs
+lasso.coef <- round(coef(lasso.cv,s=lasso.cv$lambda.min),2)
+
+#Logistic Coeffs
+log.coef <- round(log.census$coefficients,2)
+
+compare.log.lasso <- data.frame(lasso.coef[,1],log.coef)
+colnames(compare.log.lasso) <- c("LassoCoefficients","LogCoefficients")
+compare.log.lasso <- compare.log.lasso %>% mutate(difference = abs(LassoCoefficients-LogCoefficients))
+
+print("Comparing our lasso coefs with logarithmic")
+compare.log.lasso
+
+#Create lasso model with optimal Lambda
+lasso.mod <- glmnet(x.train, y.train, lambda=lasso.cv$lambda.min,alpha=1,family="binomial")
+
+
+importance.lasso <- varImp(lasso.mod, lambda=lasso.cv$lambda.min,scale=FALSE)
+print("Variable Importance")
+sapply(importance.lasso, function(x) head(row.names(importance.lasso)[order(x, decreasing=TRUE)],5))
+
+#Training error
+lasso.train.pred <- predict(lasso.mod, s=lasso.cv$lambda.min, newx=x.train,type="response")
+lasso.test.pred <- predict(lasso.mod, s=lasso.cv$lambda.min, newx=x.test,type="response")
+
+#Add column for our predictions
+election.tr.mutated = election.tr %>%
+  mutate(predict.candidate=as.factor(ifelse(lasso.train.pred<=0.5 , "Donald Trump", "Joe Biden")))
+
+election.te.mutated = election.te %>%
+  mutate(predict.candidate=as.factor(ifelse(lasso.test.pred<=0.5 , "Donald Trump", "Joe Biden")))
+
+
+#Input values in records matrix
+records[3,1]=calc_error_rate(election.tr.mutated$predict.candidate, election.tr$candidate)
+records[3,2]=calc_error_rate(election.te.mutated$predict.candidate, election.te$candidate)
+records
+
+```
+Lasso and Log coefficients look relatively similar, sharing a few top 5 influential variables.
+
+## ROC Curves for all 3 models
+```{r,echo=FALSE,fig.height=6,fig.align='center'}
+#For logistic
+pred.log = prediction(log.test.pred, election.te$candidate)
+
+perf.log = performance(pred.log, measure="tpr", x.measure ="fpr")
+
+
+#For Lasso
+pred.lasso = prediction(lasso.test.pred, election.te$candidate)
+
+perf.lasso = performance(pred.lasso, measure="tpr", x.measure ="fpr")
+
+#For Tree
+pred.tree = prediction(census.tree.pred.te[,2],election.te$candidate)
+perf.tree = performance(pred.tree, measure="tpr", x.measure ="fpr")
+
+
+plot(perf.log,col=2,lwd=3,mail="ROC curve for test data")
+lines(perf.lasso@x.values[[1]], perf.lasso@y.values[[1]], col = 3,lwd=3)
+lines(perf.tree@x.values[[1]], perf.tree@y.values[[1]], col = 4,lwd=3)
+abline(0,1)
+legend(.7,.6,legend=c("Logarithmic", "LASSO","Tree"),
+       col=c("red", "green","blue"), lty=1:3)
+```
+
+## Preparing for more complex analysis
+```{r,echo=FALSE}
+#Extend our records matrix
+records.continued = matrix(NA, nrow=5, ncol=2)
+colnames(records.continued) = c("train.error","test.error")
+rownames(records.continued) = c("tree","logistic","lasso","randomforest","boosting")
+records.continued[1:3,1:2]=records[1:3,1:2]
+
+
+```
+## Random Forests
+```{r,echo=FALSE}
+set.seed(123)
+rf.census = randomForest(candidate ~ .,data=election.tr,importance=TRUE)
+summary(rf.census)
+plot(rf.census)
+
+
+varImpPlot(rf.census, sort=T,
+           main="Variable Importance for rf.census", n.var=10)
+
+
+#Check our error rates
+rf.predict.trn = predict(rf.census, newdata = election.tr,
+                  type = "class")
+rf.predict.test = predict(rf.census, newdata = election.te,
+                  type = "class")
+
+records.continued[4,1]=calc_error_rate(rf.predict.trn, election.tr$candidate)
+records.continued[4,2]=calc_error_rate(rf.predict.test, election.te$candidate)
+records.continued
+
+
+```
+It would appear that our random forest model has a very similar variable importance to our original tree model, though does not look much similar to our lasso or logistic model. However, this model seems to have overfit our data (having a training error of 0), so we will see if a boosting model is more accurate.
+
+## Boosting model
+```{r,echo=FALSE,fig.height=6,fig.align='center'}
+boost.census = gbm(ifelse(candidate=="Joe Biden",1,0)~., data=election.tr, distribution="bernoulli", n.trees=500)
+
+summary(boost.census)
+
+#Check our error rates
+boost.predict.trn = predict(boost.census, newdata = election.tr,
+                  type = "response")
+boost.predict.test = predict(boost.census, newdata = election.te,
+                  type = "response")
+
+boost.predict.trn = ifelse(boost.predict.trn > 0.5, "Joe Biden", "Donald Trump")
+boost.predict.test = ifelse(boost.predict.test > 0.5, "Joe Biden", "Donald Trump")
+
+records.continued[5,1]=calc_error_rate(boost.predict.trn, election.tr$candidate)
+records.continued[5,2]=calc_error_rate(boost.predict.test, election.te$candidate)
+records.continued
+```
+Our boosting model again looks very similar to our other two tree models, and not much like the lasso or logistic model. The RF, Boosting, and single Tree models share the top 3 most influential variables. 
+
+
+
+## Linear Regression
+```{r,echo=FALSE}
+election.cl.trump <- election.cl2 %>% filter(candidate=="Donald Trump")
+election.cl.biden <- election.cl2 %>% filter(candidate=="Joe Biden")
+
+
+election.cl.trump <- subset(election.cl.trump,select=-c(candidate,county))
+
+election.cl.biden <- subset(election.cl.biden,select=-c(candidate,county))
+
+lm.biden <- lm(total_votes ~ .,data=election.cl.biden)
+lm.trump <- lm(total_votes ~ .,data=election.cl.trump)
+
+biden_sum <- summary(lm.biden)
+trump_sum <- summary(lm.trump)
+biden_sum
+trump_sum
+
+#Variable importance for lm biden
+lm.importance.biden <- varImp(lm.biden,scale=FALSE)
+sapply(lm.importance.biden, function(x) head(row.names(lm.importance.biden)[order(x, decreasing=TRUE)],5))
+
+#Variable importance for lm trump
+lm.importance.trump <- varImp(lm.trump,scale=FALSE)
+sapply(lm.importance.trump, function(x) head(row.names(lm.importance.trump)[order(x, decreasing=TRUE)],5))
+```
+These models have some shared characteristics to our classification models. I first noticed that total population is the predictor with the highest influence in both the model for trump and the model for Biden In all three our tree models (single,random forest, and boosting), total population also falls into the top three most important predictors. Another variable with a lot of influence in our Biden model was VotingAgeCitizen, which also had a lot of influence in our lasso model. Interestingly, transit is not a highly inflential variable in our linear models, but was highly important in all of our classification models except our logistic regression model. 
+
+## Discuss insights
+
+I prefer our classification methods over our regression method. I believe the issue we are trying to tackle falls much more into the classification setting than the regression one. The prediction we are trying to make is: "Which candidate is going to win in which state." When we set total votes to be our response in a linear setting, we are simply looking at how many votes that candidate got, without comparing it to the other candidate. Here, totalpop is the predictor with the most influence, simply because a state with a higher population will have more votes in the election in general, not just for a specific candidate. I believe our classification methods that compare both candidates at once do a better job of answering the question we are trying to ask. 
+
+
+The largest issue I have taken with my statistical analysis is with the influence of the "Transit" variable in our tree models. It seems unreasonable to me that this would have higher influence than the predictors that followed it, being: percentage nonwhite, total population, and percentage in a professional field. Accredited sources such as the Washington Post stressed that demographics (specifically race, sex, and education) played the largest role in election results. You will be hard pressed to find as many articles on public transportation's role in the 2020 election. As I mentioned before, the only conclusion I can possibly draw from this is that a higher public transportation rating would likely be in more urban counties, but a high transit rating predicted a vote for Donald Trump. This seems unreasonable because urban areas in the US tend to be more liberal, due in part to their diversity.
+
+What does seem reasonable are the high influences of white/minority, total population, and professional predictor variables in our tree models. As stated before, professional data analytics deemed race and education demographics to be the big influencers of election results. 
+
+White and Minority predictors are self explanatory in this case. Our trees modeled that higher White percentage generally meant more votes for Trump. This is consistent with the 2016 model we see in the Washington post. 
+
+Total population also has some correlation to demographics. A higher population would in most cases correlate to a large city, which I know to be more racially diverse than rural areas. There is generally a higher percentage of educated citizens near urban areas.
+
+Percentage professionalism is certainly correlated with the education rates of that county, another predictor deemed important by the Washington post.
+
+
+
+
