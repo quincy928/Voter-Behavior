@@ -4,8 +4,8 @@ This project aims to analyze voter behavior in the 2020 US presidential election
 ## EDA
 The data used in this project is publicly available from the United States Census Bureau and the MIT Election Data and Science Lab. We used the data from the 2020 US presidential election, which includes demographic and socio-economic factors for each county in the United States. We explored the properties of both datasets, and aggregated them. We then took an initial look at all potential candidates in the election before narrowing our scope down to just Donald Trump and Joe Biden. We initially found that states with high presence of racial minorities were more likely to vote for Biden. 
 <div style="display: flex;">
-  <img src="images/high_minority_plot.png" alt="Image 1" style="width: 50%; height: auto;">
-<img src="images/winners2020_plot.png" alt="Image 2" style="width: 50%;">
+  <img src="images/high_minority_plot.png" alt="Image 1" style="width: 50%;">
+<img src="images/winners2020_plot.png" alt="Image 2" style="width: 60%;">
 
 </div>
 
