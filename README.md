@@ -13,7 +13,9 @@ We used both classification and regression methods to analyze the data. Our regr
 
 <img src="images/ROC.png" alt="Image 2" style="width: 50%;">
 
-## Conclusion
-Our analysis showed that classification methods were better suited for predicting which candidate would win in each state. We found that demographic factors such as race, education, and profession were the biggest influencers on election results. However, we also found that the "Transit" variable had a higher influence than expected in our tree models. We believe this is due to its correlation with urban areas, which tend to be more diverse and liberal.
+Our boosting model found our most predictive variables to be 'Transit', 'White', 'TotalPop', 'Professional', and 'Employed' on voter behavior.
 
-In conclusion, we recommend using classification methods with demographic and socio-economic factors to predict which candidate will win in each state in future elections.
+<img src="images/boosting.png" alt="Image 2" style="width: 50%;">
+
+## Conclusion
+Our analysis leans towards classification methods over regression, focusing on predicting which candidate will win in each state rather than solely examining total votes. This shift addresses the core question of candidate comparison, recognizing the influence of predictors like total population as a reflection of overall voting potential rather than candidate preference. Concerns arise regarding the disproportionate influence of the "Transit" variable in our models, contrasting with the emphasis on demographics by reputable sources like the Washington Post. Conversely, predictors such as racial demographics, total population, and professional fields exhibit logical and significant influence, aligning with past election trends and analytical insights regarding voting behavior.
