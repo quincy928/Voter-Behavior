@@ -10,6 +10,7 @@ The data used in this project is publicly available from the United States Censu
 
 ## Methods
 We used both classification and regression methods to analyze the data. Our regression method used total votes as the response variable and various predictor variables to predict the number of votes each candidate would receive. Our classification methods compared both candidates at once to predict which candidate would win in each state. Our initial Tree and Logarithmic models outperformed our LASSO model, so we moved forward to a more powerful classification model.
+
 <img src="images/ROC.png" alt="Image 2" style="width: 50%;">
 
 ## Conclusion
